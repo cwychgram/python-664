@@ -15,7 +15,7 @@ arcpy.env.overwriteOutput = True
 
 # use ListFeatureClasses, Describe, and SpatialReference to project all 
 # shapefiles in workspace into MD StatePlane
-outWorkspace = "C:/Users/caraw/Documents/GEOG664/TermProject/shapefiles_mdsp"
+outWorkspace = "/shapefiles_mdsp"
 for fc in arcpy.ListFeatureClasses():
     dsc = arcpy.Describe(fc)
     if dsc.spatialReference.Name == "Unknown":
@@ -125,6 +125,7 @@ stores = "/shapefiles_mdsp/stores_districts"
 
 # use cursor to assign HFAI score based on district and store type
 # again, these scores are from the Food Environment Briefs for each district
+# the store type corresponding to the else statement is "Supermarket"
 arcpy.AddField_management(
         stores, 
         "HFAI", 
@@ -175,7 +176,7 @@ with arcpy.da.UpdateCursor(
             elif store[0] == "Public Market":
                 store[2] = -999
             else:
-                store[2] = 28
+                store[2] = 28.0
             cursor.updateRow(store)
         elif store[1] == "4":
             if store[0] in ["Corner Store", "Small Grocery"]:
@@ -332,6 +333,17 @@ with arcpy.da.UpdateCursor(
                 store[2] = 28.5
             cursor.updateRow(store) 
             
+# you'll notice some of the HFAI values above are -999, and that's because
+# according to the Food Environment Briefs, not all districts have each
+# store type. we can now use a SearchCursor to verify that all the stores 
+# are accounted for and none received a -999, which would be a problem
+with arcpy.da.SearchCursor(
+        stores, 
+        ["OBJECTID"],
+        '"HFAI" = -999') as cursor:
+    for store in cursor:
+        print(store[0]) # no stores are printed, so fine to continue
+            
 # now we need to calculate average HFAI at some area level
 # CLF used census block groups in their analysis
             
@@ -396,7 +408,7 @@ with arcpy.da.UpdateCursor(Avg_HFAI,
 
 # save as raster
 inFeature = "shapefiles_mdsp/Avg_HFAI.shp"
-outRaster = "C:/Users/caraw/Documents/GEOG664/TermProject/rasters/HFAI_FD.tif"
+outRaster = "/rasters/HFAI_FD.tif"
 field = "HFAI_FD"
 cellSize = 300 # 300 ft is average street block length
 arcpy.FeatureToRaster_conversion(inFeature, 
