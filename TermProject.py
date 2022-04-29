@@ -36,12 +36,12 @@ for fc in arcpy.ListFeatureClasses():
 counties = "/shapefiles_mdsp/Maryland_Counties.shp"
 
 # subset Baltimore City, save as new shapefile, and read in
-balt = arcpy.SelectLayerByAttribute_management(
+balt_bdy = arcpy.SelectLayerByAttribute_management(
         counties, 
         "NEW_SELECTION", 
         '"NAME" = \'Baltimore City\'')
 arcpy.CopyFeatures_management(
-        balt, 
+        balt_bdy, 
         "/shapefiles_mdsp/balt_bdy")
 balt_bdy = "/shapefiles_mdsp/balt_bdy.shp"
 
@@ -68,11 +68,21 @@ arcpy.CopyFeatures_management(
         "/shapefiles_mdsp/water")
 water = "/shapefiles_mdsp/water.shp"
 
+# subset Transportation type, save as new shapefile, and read in
+trans = arcpy.SelectLayerByAttribute_management(
+        land, 
+        "NEW_SELECTION", 
+        '"LU_CODE" = 80')
+arcpy.CopyFeatures_management(
+        trans, 
+        "/shapefiles_mdsp/trans")
+trans = "/shapefiles_mdsp/trans.shp"
+
 # read in Baltimore City parks. Source: Open Baltimore
 parks = "/shapefiles_mdsp/parks_parks.shp"
 
-# use erase to create a shapefile mask that will be used to exclude industrial 
-# areas, water bodies, and parks from food deserts
+# use erase to create a polygon mask that will be used to exclude industrial 
+# areas, water bodies, transportation, and parks from food deserts
 eraseOutput = "/shapefiles_mdsp/industry_erase"
 arcpy.Erase_analysis(balt_bdy, 
                      industry, 
@@ -81,8 +91,12 @@ eraseOutput = "/shapefiles_mdsp/industry_water_erase"
 arcpy.Erase_analysis("/shapefiles_mdsp/industry_erase", 
                      water, 
                      eraseOutput)
-eraseOutput = "/shapefiles_mdsp/balt_mask"
+eraseOutput = "/shapefiles_mdsp/industry_water_trans_erase"
 arcpy.Erase_analysis("/shapefiles_mdsp/industry_water_erase", 
+                     trans, 
+                     eraseOutput)
+eraseOutput = "/shapefiles_mdsp/balt_mask"
+arcpy.Erase_analysis("/shapefiles_mdsp/industry_water_trans_erase", 
                      parks, 
                      eraseOutput)
 
@@ -402,24 +416,169 @@ with arcpy.da.UpdateCursor(Avg_HFAI,
 
 # For each food desert criteria, we will save the final 1/0 result as a 
 # raster. The reason for this is that later we need to aggregate all the
-# criteria to find which areas have all 4 criteria (food desert). Because
+# criteria to find which areas have all 3 criteria (food desert). Because
 # not all our criteria will be at the same geographic level, saving the output
 # of each as a raster easily allows us to combine them at the end
+        
+# set raster environment settings
+arcpy.env.cellSize = "300" # 300 ft is average street block length
+arcpy.env.mask = "/shapefiles_mdsp/balt_mask"
 
 # save as raster
-inFeature = "shapefiles_mdsp/Avg_HFAI.shp"
-outRaster = "/rasters/HFAI_FD.tif"
+inFeature = Avg_HFAI
+outRaster = "/rasters/hfai_fd.tif"
 field = "HFAI_FD"
-cellSize = 300 # 300 ft is average street block length
 arcpy.FeatureToRaster_conversion(inFeature, 
                                  field, 
-                                 outRaster, 
-                                 cellSize)
+                                 outRaster)
 
-# use extract by mask with our previously created balt_mask to mask out
-# industrial areas, water bodies, and parks
-inRaster = "/rasters/HFAI_FD.tif"
+# apparently mask is not an environment setting for FeatureToRaster, but we 
+# can just use extract by mask to mask out industrial areas, water bodies, 
+# transportation, and parks
+inRaster = "/rasters/hfai_fd.tif"
 inMaskData = "/shapefiles_mdsp/balt_mask"
 outExtractByMask = arcpy.sa.ExtractByMask(inRaster, 
                                           inMaskData)
-outExtractByMask.save("C:/Users/caraw/Documents/GEOG664/TermProject/rasters/HFAI_FD_mask.tif")
+outExtractByMask.save("C:/Users/caraw/Documents/GEOG664/TermProject/" +
+                      "rasters/hfai_fd_final.tif")
+
+## (2) Distance to supermarker is more than 1/4 mile ##
+
+# subset supermarkets from stores, save as new shapefile, and read in
+supermarkets = arcpy.SelectLayerByAttribute_management(
+        stores,
+        "NEW_SELECTION",
+        '"Type" = \'Supermarket\'')
+arcpy.CopyFeatures_management(supermarkets,
+                              "/shapefiles_mdsp/supermarkets")
+supermarkets = "/shapefiles_mdsp/supermarkets.shp"
+
+# create 1/4 mile buffers around supermarkets and dissolve
+supermarketsBuffer = "/shapefiles_mdsp/supermarkets_buffer"
+bufferDistance = ".25 Miles"
+sideType = "FULL"
+endType = "ROUND"
+dissolveType = "ALL"
+arcpy.Buffer_analysis(supermarkets,
+                      supermarketsBuffer,
+                      bufferDistance,
+                      sideType,
+                      endType,
+                      dissolveType)
+
+# erase the buffers from the Baltimore City boundary mask
+# this is needed to establish Baltimore City as the boundary of our raster
+eraseOutput = "/shapefiles_mdsp/supermarkets_erase"
+arcpy.Erase_analysis("/shapefiles_mdsp/balt_mask",
+                     supermarketsBuffer,
+                     eraseOutput)
+
+# set a new field equal to 1 and then save as raster
+# the previously set mask environment setting will work here
+inFeature = "shapefiles_mdsp/supermarkets_erase.shp"
+newfield = "Smkt_FD"
+fieldtype = "SHORT"
+fieldname = arcpy.ValidateFieldName(newfield)
+arcpy.AddField_management(inFeature,
+                          fieldname,
+                          fieldtype)
+arcpy.CalculateField_management(inFeature,
+                                newfield,
+                                1,
+                                "PYTHON3")
+outRaster = "/rasters/supermarkets_fd.tif"
+field = "Smkt_FD"
+arcpy.FeatureToRaster_conversion(inFeature,
+                                 field,
+                                 outRaster)
+
+# reclass raster so that all the null space (i.e., < 1/4 mile to supermarket)
+# within the Baltmimore City mask is set to 0. Otherwise, there are errors 
+# when trying to do raster math
+inRaster = "/rasters/supermarkets_fd.tif"
+reclassField = "Value"
+remap = arcpy.sa.RemapValue([
+        [1, 1],
+        ["NODATA", 0]])
+outReclassify = arcpy.sa.Reclassify(inRaster,
+                                    reclassField,
+                                    remap)
+outReclassify.save("C:/Users/caraw/Documents/GEOG664/TermProject/rasters/"
+                   "supermarkets_fd_final.tif")
+
+
+## (3) Social Vulnerability Index (SVI) is high ##
+
+# whereas CLF used income and vehicle access as their final two criteria,
+# here we use the census tract-level SVI overall percentile ranking. This
+# ranking captures socioeconomic status, household composition and disability,
+# minority status and language, and housing type and transportation. We will
+# use overall percentile ranking >= .9 as our criteria for a food desert.
+# This represents the most vulnerable areas
+
+# read in Maryland SVI. Source: CDC
+md_svi = "/shapefiles_mdsp/SVI2018_MARYLAND_tract.shp"
+
+# subset Baltimore City, save as new shapefile, and read in
+balt_svi = arcpy.SelectLayerByAttribute_management(
+        md_svi, 
+        "NEW_SELECTION", 
+        '"COUNTY" = \'Baltimore City\'')
+arcpy.CopyFeatures_management(
+        balt_svi, 
+        "/shapefiles_mdsp/balt_svi")
+balt_svi = "/shapefiles_mdsp/balt_svi.shp"
+
+# use cursor to create binary variable indicating whether RPL_THEMES is >= .75
+arcpy.AddField_management(balt_svi, 
+                          "SVI_FD", 
+                          "SHORT")
+with arcpy.da.UpdateCursor(balt_svi, 
+                           ["RPL_THEMES", 
+                            "SVI_FD"]) as cursor:
+    for tract in cursor:
+        if tract[0] >= .9:
+            tract[1] = 1
+        else:
+            tract[1] = 0
+        cursor.updateRow(tract)
+
+# save as raster
+inFeature = balt_svi
+outRaster = "/rasters/svi_fd.tif"
+field = "SVI_FD"
+arcpy.FeatureToRaster_conversion(inFeature, 
+                                 field, 
+                                 outRaster)
+
+# use extract by mask to mask out industrial areas, water bodies, 
+# transportation, and parks
+inRaster = "/rasters/svi_fd.tif"
+inMaskData = "/shapefiles_mdsp/balt_mask"
+outExtractByMask = arcpy.sa.ExtractByMask(inRaster, 
+                                          inMaskData)
+outExtractByMask.save("C:/Users/caraw/Documents/GEOG664/TermProject/" +
+                      "rasters/svi_fd_final.tif")
+
+##########################
+## CREATE FOOD DESERTS  ##
+##########################
+
+# first list out all the raster names
+rasters = []
+walk = arcpy.da.Walk(arcpy.env.workspace, 
+                     topdown = True, 
+                     datatype = "RasterDataset")
+for dirpath, dirnames, filenames in walk:
+    for filename in filenames:
+        rasters.append(filename)
+print(rasters)
+
+# read in the three rasters we need (i.e., final 1/0 rasters)
+fd_1 = arcpy.Raster("/rasters/hfai_fd_final.tif")
+fd_2 = arcpy.Raster("/rasters/supermarkets_fd_final.tif")
+fd_3 = arcpy.Raster("/rasters/svi_fd_final.tif")
+
+# use raster math to multiply all three 1/0 rasters
+fd = fd_1 * fd_2 * fd_3
+fd.save("C:/Users/caraw/Documents/GEOG664/TermProject/rasters/fd_final.tif")
