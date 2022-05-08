@@ -535,7 +535,7 @@ arcpy.CopyFeatures_management(
         "/shapefiles_mdsp/balt_svi")
 balt_svi = "/shapefiles_mdsp/balt_svi.shp"
 
-# use cursor to create binary variable indicating whether RPL_THEMES is >= .75
+# use cursor to create binary variable indicating whether RPL_THEMES is >= .9
 arcpy.AddField_management(balt_svi, 
                           "SVI_FD", 
                           "SHORT")
